@@ -13,7 +13,8 @@ namespace BikiniFriends
         private Point orbitMouse;
         private bool orbitMotionSeen, orbitSeen, pilotFlight;
         private int orbitDirection, throwCount;
-        private double throwSequenceStarted, danceStarted, contactReactionUntil;
+        private double throwSequenceStarted, danceStarted, contactReactionUntil, avoidUntil;
+        private int avoidDir;
 
         internal bool IsCompanionFloorPose
         { get { return State == PetState.Walk || State == PetState.Pause || State == PetState.Resting || State == PetState.IdleCry || State == PetState.Squish; } }
@@ -146,10 +147,15 @@ namespace BikiniFriends
             return new RectangleF((float)X - bw / 2, (float)Y - bh, Math.Max(8, bw), Math.Max(8, bh));
         }
 
+        internal bool CanBeShoved { get { return State != PetState.Drag && State != PetState.Wall && State != PetState.WindowClimb; } }
+
+        /// <summary>부딪힌 직후 잠시 상대 쪽으로 다시 걸어가지 않도록 피하는 방향을 기억한다.</summary>
+        private bool AvoidingPartner(IWorld w) { return w.Now < avoidUntil; }
+
         internal void Bump(IWorld w, int direction)
         {
             if (PlayOptions.Current.PositionFixed) return;
-            Dir = direction;
+            Dir = direction; avoidDir = direction; avoidUntil = w.Now + 2.5;
             if (State == PetState.Wall) { wallDescending = direction > 0; return; }
             if (State == PetState.Thrown) { throwVx = direction * Math.Max(110 * S, Math.Abs(throwVx) * .65); return; }
             if (State == PetState.Falling) { helicopterDrift = direction * 70 * S; return; }
