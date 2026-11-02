@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -76,9 +76,18 @@ namespace BikiniFriends
         }
         internal static void Reset(float scale) { Scale = scale; cache.Clear(); }
 
+        /// <summary>같은 캐릭터를 배율을 더 키워 그린다(알림 친구). 걸어 다니는 친구는 늘 배율 1.</summary>
+        internal static CharacterArt Zoomed(int id, float zoom)
+        {
+            id = ((id % Count) + Count) % Count;
+            return new CharacterArt(id, zoom);
+        }
+
         public readonly int Id;
         public readonly CharInfo Info;
         public readonly CharRig Rig;
+        public string Name { get { return Info.Name; } }
+        public readonly float Zoom;
         public readonly float K;          // 리그 단위 1 = 화면 K 픽셀
         public readonly int W, H;         // 서 있는 모습의 상자(걷기 기준) — 이동·충돌 기준
         public readonly int ContactW;     // 친구끼리 부딪힘 폭
@@ -86,11 +95,14 @@ namespace BikiniFriends
         public readonly Dim Ceiling;
         public int CeilingTopInset { get { return 0; } }
         public int CeilingContactHeight { get { return Ceiling.H; } }
+        /// <summary>장식·말풍선 치수의 기준 단위(화면 배율 × 확대 배율).</summary>
+        public float Unit { get { return Scale * Zoom; } }
 
-        private CharacterArt(int id)
+        private CharacterArt(int id, float zoom = 1f)
         {
             Id = id; Info = Infos[id]; Rig = BikiniFriends.Rig.Of(id);
-            H = (int)Math.Round(BaseHeight * Scale * Info.Height);
+            Zoom = zoom;
+            H = (int)Math.Round(BaseHeight * Scale * Info.Height * zoom);
             K = H / BikiniFriends.Rig.RefH;
             W = (int)Math.Round(H * Info.WidthRatio);
             ContactW = (int)Math.Round(H * Info.ContactRatio);

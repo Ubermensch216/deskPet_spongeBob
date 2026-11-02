@@ -259,7 +259,7 @@ namespace BikiniFriends
             return bitmap;
         }
 
-        private static Color[] Palette(int theme)
+        internal static Color[] Palette(int theme)
         {
             if (theme == 1) return new[] { Color.FromArgb(255, 186, 93), Color.FromArgb(255, 115, 137), Color.FromArgb(202, 111, 222), Color.FromArgb(133, 136, 249) };
             if (theme == 2) return new[] { Color.FromArgb(104, 240, 188), Color.FromArgb(107, 219, 249), Color.FromArgb(145, 154, 255), Color.FromArgb(224, 139, 249) };

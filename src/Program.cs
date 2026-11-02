@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -26,6 +26,9 @@ namespace BikiniFriends
             if (args.Length >= 2 && args[0] == "--render-test") { DevTools.RenderSheet(args[1], args.Length >= 3 ? float.Parse(args[2]) : Native.SystemDpiScale()); return; }
             if (args.Length >= 2 && args[0] == "--selftest") { Environment.Exit(DevTools.SelfTest(args[1])); return; }
             if (args.Length >= 2 && args[0] == "--ui-test") { Environment.Exit(DevTools.UiTest(args[1])); return; }
+            if (args.Length >= 2 && args[0] == "--note-test") { Environment.Exit(DevTools.NoteTest(args[1])); return; }
+            if (args.Length >= 2 && args[0] == "--alert-test") { Environment.Exit(DevTools.AlertTest(args[1], args.Length >= 3 ? args[2].Replace("\\n", "\n") : null)); return; }
+            if (args.Length >= 2 && args[0] == "--note-shots") { Environment.Exit(DevTools.NoteShots(args[1])); return; }
             bool created;
             using (var mutex = new Mutex(true, "BikiniFriends_DeskFriend_single_instance", out created))
             {
@@ -40,7 +43,7 @@ namespace BikiniFriends
                 {
                     PlayOptions.Load(); FriendData.Load();
                     CharacterArt.Reset(Native.SystemDpiScale());
-                    var app = new App();
+                    var app = new App(); app.Notes = new NoteManager(app); app.Notes.Start();
                     Application.Run(app);
                 }
                 catch (Exception error)
@@ -62,7 +65,7 @@ namespace BikiniFriends
         public FakeWorld() { Areas = new List<Rectangle> { new Rectangle(0, 0, 1280, 720) }; Rng = new Random(7); }
     }
 
-    internal static class DevTools
+    internal static partial class DevTools
     {
         [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern void mouse_event(int flags, int dx, int dy, int data, UIntPtr extra);
         [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, int flags, UIntPtr extra);
@@ -192,7 +195,8 @@ namespace BikiniFriends
                     }
                     strip.Save(Path.Combine(dir, "motion_" + CharacterArt.Infos[c].Key + ".png"), ImageFormat.Png);
                 }
-            }            Console.WriteLine("saved " + dir);
+            }
+            Console.WriteLine("saved " + dir);
         }
 
         /// <summary>실제 창들을 만들어 띄우고 그림으로 남긴다 (레이아웃·실행 오류 확인).</summary>
@@ -217,9 +221,9 @@ namespace BikiniFriends
             App app = null;
             step("앱 생성(펫 4마리)", () => { app = new App(true); app.Spawn(0); app.Spawn(1); app.Spawn(2); app.Spawn(3); pump(1); });
             step("알림 설정 창", () => { var f = new SettingsForm(app); shot(f, "ui_settings"); f.Close(); });
-            step("움직임 설정 창", () => { var f = new PlaySettingsForm(app); shot(f, "ui_play"); f.Close(); });
-            step("친구 기록 창", () => { var f = new FriendRecordForm(app); shot(f, "ui_record"); f.Close(); });
-            step("도우미 창", () => { FriendData.Current.Todos.Add(new TodoItem { Text = "첫 할 일", Done = true }); FriendData.Current.Todos.Add(new TodoItem { Text = "둘째 할 일" }); var f = new FriendPanel(app); shot(f, "ui_helper"); f.Close(); });
+            step("움직임 설정 창", () => { var f = new SettingsForm(app, 1); shot(f, "ui_play"); f.Close(); });
+            step("친구 기록 창", () => { var f = new SettingsForm(app, 3); shot(f, "ui_record"); f.Close(); });
+            step("도우미 창", () => { FriendData.Current.Todos.Add(new TodoItem { Text = "첫 할 일", Done = true }); FriendData.Current.Todos.Add(new TodoItem { Text = "둘째 할 일" }); var f = new SettingsForm(app, 3); shot(f, "ui_helper"); f.Close(); });
             step("정각 카드 + 가장자리 빛", () =>
             {
                 var n = new HourlyNotice(app.TrayIconImage); n.SetMessage(App.HourlyMessage(DateTime.Now, true, "13:00", "점심 먹으러 가자!", false, "18:00", "x"));
@@ -373,6 +377,9 @@ namespace BikiniFriends
                 a1.SetState(PetState.Pause, w4); a2.SetState(PetState.Pause, w4); a1.Y = a2.Y = 720;
                 App.ResolveCompanionContacts(w4, new List<Pet> { a1, a2 }, null);
                 check(a2.ContactBody(0).Left - a1.ContactBody(0).Right > -1 || Math.Abs(a1.X - a2.X) > a1.Art.W * .6, "겹친 친구는 서로 떨어짐");
+
+                // 메모·알림펫 자체 점검
+                NoteSelfTests(check, dir);
             }
             catch (Exception e) { log.AppendLine("EXCEPTION " + e); failures++; }
             log.AppendLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");

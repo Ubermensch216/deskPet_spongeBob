@@ -8,7 +8,8 @@ namespace BikiniFriends
     internal enum PetState
     {
         Falling, Walk, Pause, Squish, Drag, Climb, Sleep, Waking, Gather, WaitHome, Cheer,
-        Resting, IdleCry, TouchCry, Hop, Sliding, Wall, Ceiling, WindowClimb, Eating, Thrown, Dizzy, SecretDance, PilotRise
+        Resting, IdleCry, TouchCry, Hop, Sliding, Wall, Ceiling, WindowClimb, Eating, Thrown, Dizzy, SecretDance, PilotRise,
+        Chat
     }
 
     internal interface IWorld
@@ -58,14 +59,19 @@ namespace BikiniFriends
         internal double HeliHalf { get { return Art.W * .66; } }
         public bool CanReact { get { return State != PetState.Drag; } }
 
-        public Pet(IWorld w, int character, double x, double y)
+        public Pet(IWorld w, CharacterArt art, double x, double y)
         {
-            Art = CharacterArt.Get(character);
+            Art = art;
             X = x; Y = y;
             Dir = w.Rng.Next(2) != 0 ? 1 : -1;
             Area = FindArea(w, x, y);
             SetState(PetState.Falling, w);
             InitializeFeatures(w);
+        }
+
+        public Pet(IWorld w, int character, double x, double y)
+            : this(w, CharacterArt.Get(character), x, y)
+        {
         }
 
         public static Rectangle FindArea(IWorld w, double x, double y)
@@ -159,6 +165,17 @@ namespace BikiniFriends
             else SetState(PetState.Cheer, w);
         }
 
+        internal void StartAlert(IWorld w)
+        {
+            Dir = -1; Hidden = false; SetState(PetState.Cheer, w);
+            cheerHopUntil = w.Now + 3.2;
+        }
+
+        /// <summary>한참 뒤에도 눈에 띄도록 가끔 다시 폴짝 뛰게 한다.</summary>
+        internal void AlertHop(IWorld w) { cheerHopUntil = w.Now + 2.4; }
+
+        internal void AdvanceAlert(double dt) { StateT += dt; animT += dt; }
+
         public void Gather(IWorld w, double targetX, double deadline)
         {
             if (State != PetState.Drag && State != PetState.Falling && State != PetState.Climb && State != PetState.Thrown)
@@ -178,7 +195,7 @@ namespace BikiniFriends
 
         public void Update(IWorld w, double dt, List<Pet> all, double mouseX)
         {
-            UpdateWalkBlend(dt); UpdateGait(dt);
+            UpdateWalkBlend(dt); UpdateGait(dt); UpdateChat(w, dt);
             if (AdvanceFeatures(w, dt)) return;
             StateT += dt; animT += dt;
             if (collideCooldown > 0) collideCooldown -= dt;

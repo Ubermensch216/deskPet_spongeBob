@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -21,12 +21,18 @@ namespace BikiniFriends
             public Decor Decor; public float DecorPhase;
             public int Variant; public float Aux;   // 대표 동작의 갈래(0/1)와 보조 값(뚱이의 바위 덮임 정도 등)
             public string AffinityLabel; public bool AffinityOnLeft;
+            public int BubbleReveal;             // AI 대화 말풍선에 지금까지 찍힌 글자 수(-1 이면 전부)
+            public bool Ai;                      // AI 가 하는 말(말풍선에 작은 AI 표시)
+            public Font BubbleFont;              // 알림 말풍선의 큰 글자(없으면 기본 글자)
+            public float BubbleWidth;            // 알림 말풍선 글줄 너비(0 이면 기본)
+            public bool CloseMark;               // 말풍선 모서리에 닫기(×) 표시
+            public Color Neon; public float NeonPulse;   // 실루엣을 감싸는 네온 빛(Neon.A == 0 이면 없음), 맥박 0~1
 
             public string Key()
             {
-                return string.Format("{0}|{1}|{2}|{3:0.00}|{4:0.00}|{5:0.0}|{6:0}|{7:0}|{8}|{9}|{10}|{11}|{12}|{13}|{14}|{15}",
+                return string.Format("{0}|{1}|{2}|{3:0.00}|{4:0.00}|{5:0.0}|{6:0}|{7:0}|{8}|{9}|{10}|{11}|{12}|{13}|{14}|{15}|{16}|{17}",
                     Pose.Hash(), FaceRight ? 1 : 0, Upside ? 1 : 0, Sx, Sy, Angle, Px, Py, Bubble ?? "", ZPhase, (int)Decor,
-                    Decor == Decor.None ? 0 : (int)(DecorPhase * 24), AffinityLabel, AffinityOnLeft, Variant, (int)(Aux * 40));
+                    Decor == Decor.None ? 0 : (int)(DecorPhase * 24), AffinityLabel, AffinityOnLeft, Variant, (int)(Aux * 40), BubbleReveal, Ai);
             }
         }
 
@@ -138,6 +144,9 @@ namespace BikiniFriends
                     DizzyPose(P); L.FaceRight = false;
                     L.Decor |= Decor.Stars; L.DecorPhase = (float)StateT;
                     break;
+                case PetState.Chat:
+                    ChatPose(P, ref L, now);
+                    break;
                 case PetState.SecretDance:
                 {
                     double phase = now - danceStarted;
@@ -150,6 +159,15 @@ namespace BikiniFriends
             }
             L.Bubble = PersistentBubble(hourlyBubble, Bubble);
             CompanionLook(ref L, now);
+            L.BubbleReveal = -1;
+            if (chatPresence > .005)
+            {
+                if (Phase != ChatPhase.None && string.IsNullOrEmpty(hourlyBubble) && Bubble == chatText && chatText.Length > 0)
+                {
+                    L.BubbleReveal = ChatRevealCount; L.Ai = true;
+                    if (L.BubbleReveal == 0) L.Bubble = null;
+                }
+            }
             return L;
         }
 
@@ -308,12 +326,21 @@ namespace BikiniFriends
                 using (var g = Graphics.FromImage(tmp))
                 {
                     g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                    textSize = g.MeasureString(L.Bubble, bubbleFont, (int)(170 * scale), StringFormat.GenericTypographic);
+                    Font bubbleF = L.BubbleFont ?? bubbleFont;
+                    float maxW = L.BubbleWidth > 0 ? L.BubbleWidth * scale : 170 * scale;
+                    textSize = g.MeasureString(L.Bubble, bubbleF, (int)maxW, StringFormat.GenericTypographic);
                 }
                 float pad = 7 * scale;
                 float bw = (float)Math.Ceiling(textSize.Width + pad * 2 + 2 * scale), bh = (float)Math.Ceiling(textSize.Height + pad * 1.4f + 2 * scale);
                 bubble = new RectangleF(-bw / 2, spriteTop - 3 * scale - tail - bh, bw, bh);
-                minX = Math.Min(minX, bubble.Left); maxX = Math.Max(maxX, bubble.Right); minY = Math.Min(minY, bubble.Top);
+                minX = Math.Min(minX, bubble.Left); maxX = Math.Max(maxX, bubble.Right); minY = Math.Min(minY, bubble.Top - (L.Ai ? 6 * scale : 0));
+                if (L.CloseMark) { maxX = Math.Max(maxX, bubble.Right + CloseRadius * scale); minY = Math.Min(minY, bubble.Top - CloseRadius * scale); }
+            }
+            if (L.Neon.A != 0)
+            {
+                // 네온 빛이 번질 여백
+                float glow = NeonGlow.Margin * scale;
+                minX -= glow; maxX += glow; minY -= glow; maxY += glow;
             }
             if (L.ZPhase >= 0) { minY = Math.Min(minY, spriteTop - 44 * scale); maxX = Math.Max(maxX, w / 2 + 22 * scale); minX = Math.Min(minX, -w / 2 - 22 * scale); }
             RectangleF badge = AffinityBadgeBounds(L, w, h, scale);
@@ -328,13 +355,31 @@ namespace BikiniFriends
                 g.Clear(Color.Transparent);
                 CharacterArt.Quality(g);
                 var full = new Matrix(); full.Translate(origin.X, origin.Y); full.Multiply(matrix);
-                g.Transform = full;
-                if (L.Upside) { g.TranslateTransform(0, -h / 2); g.RotateTransform(180); g.TranslateTransform(0, h / 2); }
-                Rig.Draw(g, art.Id, L.Pose, k, L.FaceRight);
+                Action<Graphics> paintBody = bg =>
+                {
+                    bg.Transform = full;
+                    if (L.Upside) { bg.TranslateTransform(0, -h / 2); bg.RotateTransform(180); bg.TranslateTransform(0, h / 2); }
+                    Rig.Draw(bg, art.Id, L.Pose, k, L.FaceRight);
 
-                // 몸에 붙어 따라 움직이는 장식
-                g.Transform = full;
-                DecorArt.Draw(g, L, art);
+                    // 몸에 붙어 따라 움직이는 장식
+                    bg.Transform = full;
+                    DecorArt.Draw(bg, L, art);
+                };
+                if (L.Neon.A != 0)
+                {
+                    // 몸을 따로 그려 그 실루엣을 따라 네온 빛을 깔고, 그 위에 몸을 얹는다.
+                    using (var body = new Bitmap(result.Width, result.Height, PixelFormat.Format32bppArgb))
+                    {
+                        using (var bg = Graphics.FromImage(body)) { bg.Clear(Color.Transparent); CharacterArt.Quality(bg); paintBody(bg); }
+                        using (Bitmap lit = NeonGlow.Compose(body, L.Neon, L.NeonPulse, scale))
+                        {
+                            g.CompositingMode = CompositingMode.SourceCopy; g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half;
+                            g.DrawImage(lit, 0, 0, lit.Width, lit.Height);
+                            g.CompositingMode = CompositingMode.SourceOver; CharacterArt.Quality(g);
+                        }
+                    }
+                }
+                else paintBody(g);
                 g.ResetTransform(); g.TranslateTransform(origin.X, origin.Y);
                 DrawAffinityBadge(g, L, badge, scale);
                 if (L.ZPhase >= 0) DrawZ(g, L, w, h, scale);
@@ -362,8 +407,51 @@ namespace BikiniFriends
             using (var fmt = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Center })
             {
                 var box = new RectangleF(r.Left + (r.Width - textSize.Width) / 2, r.Top + (r.Height - textSize.Height) / 2, textSize.Width + 2, textSize.Height + 2);
-                g.DrawString(L.Bubble, bubbleFont, text, box, fmt);
+                var saved = g.Save();
+                Font bubbleF = L.BubbleFont ?? bubbleFont;
+                // AI 가 하는 말은 전체 글을 기준으로 자리를 잡고, 찍힌 글자까지만 보여 준다(말풍선 크기가 흔들리지 않게)
+                if (L.BubbleReveal >= 0 && L.BubbleReveal < L.Bubble.Length)
+                {
+                    fmt.SetMeasurableCharacterRanges(new[] { new CharacterRange(0, Math.Max(1, L.BubbleReveal)) });
+                    using (Region shown = g.MeasureCharacterRanges(L.Bubble, bubbleF, box, fmt)[0]) g.SetClip(shown, CombineMode.Replace);
+                }
+                g.DrawString(L.Bubble, bubbleF, text, box, fmt);
+                g.Restore(saved);
             }
+            if (L.CloseMark) DrawCloseMark(g, r, scale);
+            if (L.Ai) DrawAiMark(g, r, scale);
+        }
+
+        private const float CloseRadius = 11f;
+
+        /// <summary>말풍선 오른쪽 위 모서리의 닫기(×) 단추 모양 — 눌러서 닫는다는 표시.</summary>
+        private static void DrawCloseMark(Graphics g, RectangleF r, float scale)
+        {
+            float rad = CloseRadius * scale, cx = r.Right - 2 * scale, cy = r.Top + 2 * scale, a = rad * .36f;
+            using (var fill = new SolidBrush(Color.FromArgb(255, 40, 40, 40)))
+            using (var cross = new Pen(Color.White, 2.2f * scale) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.FillEllipse(fill, cx - rad, cy - rad, rad * 2, rad * 2);
+                g.DrawLine(cross, cx - a, cy - a, cx + a, cy + a); g.DrawLine(cross, cx - a, cy + a, cx + a, cy - a);
+            }
+        }
+
+        /// <summary>AI 가 한 말임을 밝히는 작은 표시(말풍선 왼쪽 위 모서리).</summary>
+        private static void DrawAiMark(Graphics g, RectangleF r, float s)
+        {
+            var tag = new RectangleF(r.Left + 7 * s, r.Top - 5.5f * s, 17 * s, 10 * s);
+            using (var path = RoundRect(tag, 5 * s))
+            {
+                using (var fill = new LinearGradientBrush(new PointF(tag.Left, tag.Top), new PointF(tag.Right, tag.Bottom), Color.FromArgb(70, 140, 255), Color.FromArgb(150, 90, 255))) g.FillPath(fill, path);
+                using (var pen = new Pen(Color.FromArgb(30, 30, 30), 1.4f * s)) g.DrawPath(pen, path);
+            }
+            try
+            {
+                using (var f = new Font("Segoe UI", 7.2f * s, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var fmt = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                { g.TextRenderingHint = TextRenderingHint.AntiAlias; g.DrawString("AI", f, Brushes.White, tag, fmt); }
+            }
+            catch { }
         }
 
         // 잠: Z 세 개가 시차를 두고(0 / 0.9 / 1.8초) 떠올라 흩어진다. 집게사장은 $ 가 떠오른다.

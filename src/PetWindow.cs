@@ -17,7 +17,10 @@ namespace BikiniFriends
         private bool mouseDown, dragging, firstPresented;
         private Point downPos;
         internal bool HasPresented { get { return firstPresented; } }
+        /// <summary>알림 친구가 화면 가운데에 나와 있는 동안 이 친구는 숨어 있다(같은 친구가 둘로 보이지 않게).</summary>
+        internal bool Suppressed;
 
+        protected override void SetVisibleCore(bool value) { base.SetVisibleCore(value && !Suppressed); }
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams
         {
@@ -40,7 +43,7 @@ namespace BikiniFriends
 
         public void Present(double now)
         {
-            if (!IsHandleCreated) return;
+            if (!IsHandleCreated || Suppressed) return;
             Pet.Look look = Pet.GetLook(now);
             string key = look.Key() + "|opacity:" + PlayOptions.Current.PetOpacityPercent;
             Bitmap bitmap = null;
@@ -67,30 +70,8 @@ namespace BikiniFriends
 
         private void PresentBitmap(Bitmap bitmap, int x, int y)
         {
-            IntPtr screen = Native.GetDC(IntPtr.Zero);
-            if (screen == IntPtr.Zero) return;
-            IntPtr dc = IntPtr.Zero, image = IntPtr.Zero, previous = IntPtr.Zero;
-            try
-            {
-                dc = Native.CreateCompatibleDC(screen);
-                byte[] bytes = LayerPixels.Premultiplied(bitmap);
-                var info = new Native.BitmapInfo { Size = 40, Width = bitmap.Width, Height = -bitmap.Height, Planes = 1, Bits = 32, ImageSize = (uint)bytes.Length };
-                IntPtr bits; image = Native.CreateDIBSection(screen, ref info, 0, out bits, IntPtr.Zero, 0);
-                if (image == IntPtr.Zero || bits == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-                Marshal.Copy(bytes, 0, bits, bytes.Length); previous = Native.SelectObject(dc, image);
-                var size = new Native.SIZE(bitmap.Width, bitmap.Height); var src = new Native.POINT(0, 0); var dst = new Native.POINT(x, y);
-                var blend = new Native.BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = PlayOptions.Current.PetAlpha, AlphaFormat = 1 };
-                if (!Native.UpdateLayeredWindow(Handle, screen, ref dst, ref size, dc, ref src, 0, ref blend, Native.ULW_ALPHA)) throw new Win32Exception(Marshal.GetLastWin32Error());
-                firstPresented = true;
-            }
+            try { LayerPixels.Present(Handle, bitmap, x, y, PlayOptions.Current.PetAlpha); firstPresented = true; }
             catch (Exception e) { FeatureLog.Write(e); }
-            finally
-            {
-                if (previous != IntPtr.Zero && dc != IntPtr.Zero) Native.SelectObject(dc, previous);
-                if (image != IntPtr.Zero) Native.DeleteObject(image);
-                if (dc != IntPtr.Zero) Native.DeleteDC(dc);
-                Native.ReleaseDC(IntPtr.Zero, screen);
-            }
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -127,6 +108,13 @@ namespace BikiniFriends
                 else Pet.Poke(app);
             }
             else if (e.Button == MouseButtons.Right) app.ShowPetMenu(this, Cursor.Position);
+        }
+
+        /// <summary>더블클릭하면 말을 건다.</summary>
+        protected override void OnMouseDoubleClick(MouseEventArgs e)
+        {
+            base.OnMouseDoubleClick(e);
+            if (e.Button == MouseButtons.Left) app.StartChat(Pet);
         }
 
         protected override void OnMouseCaptureChanged(EventArgs e)

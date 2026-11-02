@@ -16,7 +16,7 @@ namespace BikiniFriends
         public bool LunchOn = true; public string LunchTime = "12:00"; public string LunchMsg = "점심 먹으러 가자!";
         public bool LeaveOn = true; public string LeaveTime = "18:00"; public string LeaveMsg = "퇴근이다! 오늘도 수고했어";
         public bool NapOn = true; public int NapMinutes = 10;
-        public bool HourlyOn = true, HourlyWindow = true;
+        public bool HourlyOn = true, HourlyWindow = true, AlertPet = true;
         public bool EdgeGlow = true; public int EdgeGlowTheme = 0, EdgeGlowWidth = 1, EdgeGlowStrength = 1;
         public bool QuietWeekdays; public int QuietStart = 9, QuietEnd = 18;
         public string Roster = "";   // 마지막에 불러 둔 친구들(캐릭터 번호, 쉼표 구분)
@@ -53,6 +53,7 @@ namespace BikiniFriends
                 if (d.TryGetValue("NapMinutes", out v) && int.TryParse(v, out n)) s.NapMinutes = Math.Max(1, Math.Min(600, n));
                 if (d.TryGetValue("HourlyOn", out v)) s.HourlyOn = v != "0";
                 if (d.TryGetValue("HourlyWindow", out v)) s.HourlyWindow = v != "0";
+                if (d.TryGetValue("AlertPet", out v)) s.AlertPet = v != "0";
                 if (d.TryGetValue("EdgeGlow", out v)) s.EdgeGlow = v != "0";
                 if (d.TryGetValue("EdgeGlowTheme", out v) && int.TryParse(v, out n)) s.EdgeGlowTheme = Math.Max(0, Math.Min(3, n));
                 if (d.TryGetValue("EdgeGlowWidth", out v) && int.TryParse(v, out n)) s.EdgeGlowWidth = Math.Max(0, Math.Min(2, n));
@@ -75,6 +76,7 @@ namespace BikiniFriends
             b.AppendLine("LeaveOn=" + (LeaveOn ? "1" : "0")); b.AppendLine("LeaveTime=" + LeaveTime); b.AppendLine("LeaveMsg=" + OneLine(LeaveMsg));
             b.AppendLine("[낮잠]"); b.AppendLine("NapOn=" + (NapOn ? "1" : "0")); b.AppendLine("NapMinutes=" + NapMinutes);
             b.AppendLine("[정각]"); b.AppendLine("HourlyOn=" + (HourlyOn ? "1" : "0")); b.AppendLine("HourlyWindow=" + (HourlyWindow ? "1" : "0"));
+            b.AppendLine("AlertPet=" + (AlertPet ? "1" : "0"));
             b.AppendLine("EdgeGlow=" + (EdgeGlow ? "1" : "0")); b.AppendLine("EdgeGlowTheme=" + EdgeGlowTheme);
             b.AppendLine("EdgeGlowWidth=" + EdgeGlowWidth); b.AppendLine("EdgeGlowStrength=" + EdgeGlowStrength);
             b.AppendLine("QuietWeekdays=" + (QuietWeekdays ? "1" : "0")); b.AppendLine("QuietStart=" + QuietStart); b.AppendLine("QuietEnd=" + QuietEnd);

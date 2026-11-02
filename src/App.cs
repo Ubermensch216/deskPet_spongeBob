@@ -74,11 +74,8 @@ namespace BikiniFriends
         private double lastTick, lastSlow, lastTop;
         private bool hidden, paused, locked, napping, autoHidden;
         private NotifyIcon tray;
-        private ToolStripMenuItem trayHideItem;
         private SettingsForm settingsForm;
-        private PlaySettingsForm playSettingsForm;
-        private FriendPanel friendPanel;
-        private FriendRecordForm friendRecordForm;
+        internal NoteManager Notes;
         private double surfaceRefreshAt, forceVisibleUntil = 12;
         public Settings Settings;
         public Icon TrayIconImage;
@@ -87,6 +84,8 @@ namespace BikiniFriends
         private DateTime hourlyLast;
         private string hourlyPendingText; private double hourlyPendingExpiry; private int hourlyActivityVersion;
         private HourlyNotice hourlyNotice;
+        private AlertPetWindow alert;
+        private PetWindow alertHidden;
         private double companionClock = -1, companionSavedAt, danceAwayAt, nextSecretDance;
         private bool danceAwaySeen;
 
@@ -94,10 +93,14 @@ namespace BikiniFriends
         public Random Rng { get { return rng; } }
         public double Now { get { return clock.Elapsed.TotalSeconds; } }
         internal List<PetWindow> LiveWindows { get { return windows; } }
+        internal bool Paused { get { return paused; } }
+        internal bool AllHidden { get { return hidden || autoHidden; } }
+        internal ChatController Chat;
 
         public App(bool testMode = false)
         {
             Settings = Settings.Load();
+            Chat = new ChatController(this);
             RefreshAreas();
             int[] roster = ParseRoster(Settings.Roster);
             TrayIconImage = CharacterArt.MakeIcon(roster.Length > 0 ? roster[0] : rng.Next(CharacterArt.Count));
@@ -170,7 +173,6 @@ namespace BikiniFriends
             var window = new PetWindow(this, pet);
             windows.Add(window);
             if (!hidden && !autoHidden) { window.Show(); window.Present(Now); }
-            UpdateMenus();
             if (!loadingRoster) SaveRoster();
         }
         private bool loadingRoster;
@@ -179,7 +181,7 @@ namespace BikiniFriends
         {
             windows.Remove(w);
             try { w.Close(); w.Dispose(); } catch { }
-            UpdateMenus(); SaveRoster();
+            SaveRoster();
         }
 
         public void BringToFront(PetWindow w) { w.KeepOnTop(); }
@@ -194,11 +196,8 @@ namespace BikiniFriends
                 window.Show(); window.Invalidate2(); window.Present(Now); window.KeepOnTop();
             }
             if (!hidden && windows.Count == 0) Spawn();
-            lastTick = Now; UpdateMenus();
+            lastTick = Now;
         }
-
-        private void UpdateMenus()
-        { if (trayHideItem != null) trayHideItem.Text = hidden ? "모두 보이기" : "모두 숨기기"; }
 
         /// <summary>화면 가운데 위에서 다시 헬리콥터로 내려오게 한다 (숨은 친구 구조).</summary>
         internal void RecoverVisible()
@@ -215,78 +214,121 @@ namespace BikiniFriends
                 w.Pet.SyncPinned(this);
                 w.Invalidate2(); w.Show(); w.Present(Now); w.KeepOnTop();
             }
-            RememberPinnedPosition(); lastTick = Now; UpdateMenus();
+            RememberPinnedPosition(); lastTick = Now;
         }
 
         // ───────── 메뉴 ─────────
+        private ContextMenuStrip BuildMenu(PetWindow w)
+        {
+            Pet pet = w != null ? w.Pet : null;
+            var menu = new ContextMenuStrip();
+            menu.Items.Add(new ToolStripMenuItem("말 걸기  (AI 대화)", null, delegate { BeginInvokeSafe(delegate { StartChat(pet); }); }) { Font = new Font(menu.Font, FontStyle.Bold), Enabled = ChatOptions.Current.Enabled, ShortcutKeyDisplayString = ChatOptions.Current.Hotkey ? ChatOptions.Current.HotkeyText : null });
+            menu.Items.Add(ModeMenu());
+            menu.Items.Add("비키니 친구들의 일기장...", null, delegate { BeginInvokeSafe(ShowDiary); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("♥ 친밀도 " + FriendData.Current.Affinity.ToString("N0") + "  ·  함께 " + FriendData.FormatTogether(FriendData.Current.TogetherSeconds)) { Enabled = false });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("간식 주기  ·  포만감 " + (int)Math.Floor(FriendData.Current.Satiety) + "/100", null, delegate { FeedFirst(pet); }));
+            menu.Items.Add(DemoMenu(pet));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(FriendsMenu(w));
+            menu.Items.Add(QuickMenu());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(NewNoteItem());
+            menu.Items.Add("설정...", null, delegate { OpenSettings(); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("종료", null, delegate { Quit(); });
+            return menu;
+        }
+
+        private ToolStripMenuItem DemoMenu(Pet pet)
+        {
+            var demo = new ToolStripMenuItem("동작 바로 보기");
+            string hobbyName = pet != null ? pet.Art.Info.Hobby : "대표 동작";
+            var items = new[] {
+                new[] { "앉아서 쉬기", "sit" },
+                new[] { "★ 대표 동작: " + hobbyName, "hobby" },
+                new[] { "잠자기", "sleep" },
+                new[] { "멍때리기", "daydream" },
+                new[] { "기지개", "stretch" },
+                new[] { "클릭할 때 달달 떨며 우는 모습", "cry" },
+                new[] { "배고플 때 우는 모습", "weep" },
+                new[] { "폴짝 뛰기", "hop" },
+                new[] { "슬라이딩", "slide" },
+                new[] { "어질어질", "dizzy" },
+                new[] { "헬리콥터 낙하", "fall" },
+                new[] { "벽 타기", "wall" },
+                new[] { "천장 타기", "ceiling" },
+                new[] { "창 타기", "window" }
+            };
+            if (pet != null && (pet.Art.Id == 0 || pet.Art.Id == 3))
+                items = items.Concat(new[] { new[] { "★ 대표 동작 두 번째: " + (pet.Art.Id == 0 ? "비눗방울 불기" : "올가미 돌리기"), "hobby2" } }).ToArray();
+            foreach (var pair in items)
+            {
+                string key = pair[1];
+                demo.DropDownItems.Add(pair[0], null, delegate {
+                    Pet p = pet ?? windows.Select(a => a.Pet).FirstOrDefault();
+                    if (p != null) p.Demonstrate(this, key);
+                });
+            }
+            demo.DropDownItems.Add("몰래 하는 군무", null, delegate { DemonstrateSecretDance(pet); });
+            return demo;
+        }
+
+        private ToolStripMenuItem FriendsMenu(PetWindow w)
+        {
+            var friends = new ToolStripMenuItem("친구");
+            friends.DropDownItems.Add(SpawnMenu("한 마리 더 부르기"));
+            if (w != null) friends.DropDownItems.Add("이 친구 보내기", null, delegate { Remove(w); });
+            friends.DropDownItems.Add(hidden ? "모두 보이기" : "모두 숨기기", null, delegate { ToggleHidden(); });
+            friends.DropDownItems.Add("화면 가운데로 다시 부르기", null, delegate { RecoverVisible(); });
+            return friends;
+        }
+
+        private ToolStripMenuItem QuickMenu()
+        {
+            var quick = new ToolStripMenuItem("빠른 설정");
+            var o = PlayOptions.Current;
+            Func<string, Func<bool>, Action<bool>, ToolStripMenuItem> toggle = (text, get, set) =>
+            {
+                var item = new ToolStripMenuItem(text) { Checked = get(), CheckOnClick = false };
+                item.Click += delegate { set(!get()); item.Checked = get(); };
+                return item;
+            };
+            quick.DropDownItems.Add(toggle("친구 위치 고정 (자동 이동 멈추기)", () => o.PositionFixed, v => SetPositionFixed(v)));
+            quick.DropDownItems.Add(toggle("얌전 모드 (바닥에서만)", () => o.Focus, v => { o.Focus = v; o.Save(); }));
+            quick.DropDownItems.Add(toggle("친밀도 숫자 표시", () => o.ShowAffinity, v => { o.ShowAffinity = v; o.Save(); ApplyCharacterSettings(); }));
+            return quick;
+        }
+
         private ToolStripMenuItem SpawnMenu(string text)
         {
             var item = new ToolStripMenuItem(text) { Enabled = windows.Count < MaxPets };
-            item.DropDownItems.Add("무작위", null, delegate { if (hidden) ToggleHidden(); Spawn(); });
+            item.DropDownItems.Add("무작위", null, delegate { SpawnFromUi(-1); });
             for (int i = 0; i < CharacterArt.Count; i++)
-            { int id = i; item.DropDownItems.Add(CharacterArt.Infos[i].Name, null, delegate { if (hidden) ToggleHidden(); Spawn(id); }); }
+            { int id = i; item.DropDownItems.Add(CharacterArt.Infos[i].Name, null, delegate { SpawnFromUi(id); }); }
             return item;
         }
 
         private void BuildTray()
         {
-            var menu = new ContextMenuStrip();
-            menu.Items.Add(SpawnMenu("친구 한 마리 더 부르기"));
-            trayHideItem = new ToolStripMenuItem("모두 숨기기", null, delegate { ToggleHidden(); });
-            menu.Items.Add(trayHideItem);
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("알림 설정...", null, delegate { OpenSettings(); });
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("종료", null, delegate { Quit(); });
-            AddFeatureMenu(menu, null);
-            menu.Opening += delegate { foreach (ToolStripItem i in menu.Items) if (i.Tag as string == "spawn") i.Enabled = windows.Count < MaxPets; };
-            menu.Items[1].Tag = "spawn";
+            var menu = BuildMenu(null);
+            menu.Opening += delegate
+            {
+                var fresh = BuildMenu(null);
+                menu.Items.Clear();
+                foreach (ToolStripItem i in fresh.Items.Cast<ToolStripItem>().ToList()) menu.Items.Add(i);
+            };
             tray = new NotifyIcon { Icon = TrayIconImage, Text = "비키니 친구들", ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += delegate { ToggleHidden(); };
         }
 
         public void ShowPetMenu(PetWindow w, Point at)
         {
-            var menu = new ContextMenuStrip();
-            var spawn = SpawnMenu("한 마리 더 부르기"); menu.Items.Add(spawn);
-            menu.Items.Add("이 친구 보내기", null, delegate { Remove(w); });
-            menu.Items.Add("모두 숨기기", null, delegate { if (!hidden) ToggleHidden(); });
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("알림 설정...", null, delegate { OpenSettings(); });
-            menu.Items.Add("종료", null, delegate { Quit(); });
-            AddFeatureMenu(menu, w.Pet);
+            var menu = BuildMenu(w);
             menu.Closed += delegate { BeginInvokeSafe(delegate { menu.Dispose(); }); };
             try { Native.SetForegroundWindow(w.Handle); } catch { }
             menu.Show(at);
-        }
-
-        internal void AddFeatureMenu(ContextMenuStrip menu, Pet pet)
-        {
-            menu.Items.Insert(0, new ToolStripMenuItem("♥ 친밀도 " + FriendData.Current.Affinity.ToString("N0") + "  ·  함께 " + FriendData.FormatTogether(FriendData.Current.TogetherSeconds)) { Enabled = false });
-            int at = Math.Max(0, menu.Items.Count - 1);
-            menu.Items.Insert(at++, new ToolStripMenuItem("화면 가운데로 다시 부르기", null, delegate { RecoverVisible(); }));
-            menu.Items.Insert(at++, new ToolStripMenuItem("움직임 · 반응 설정...", null, delegate { ShowPlaySettings(); }));
-            var pinned = new ToolStripMenuItem("친구 위치 고정 (자동 이동 멈추기)") { Checked = PlayOptions.Current.PositionFixed };
-            pinned.Click += delegate { SetPositionFixed(!PlayOptions.Current.PositionFixed); pinned.Checked = PlayOptions.Current.PositionFixed; };
-            menu.Items.Insert(at++, pinned);
-            menu.Items.Insert(at++, new ToolStripMenuItem("친구 기록 · 생활 설정...", null, delegate { ShowFriendRecords(); }));
-            menu.Items.Insert(at++, new ToolStripMenuItem("도우미 · 할 일 · 메모 · 타이머...", null, delegate { ShowFriendPanel(); }));
-            menu.Items.Insert(at++, new ToolStripMenuItem("간식 주기  ·  포만감 " + (int)Math.Floor(FriendData.Current.Satiety) + "/100", null, delegate
-            { Pet p = pet ?? windows.Select(a => a.Pet).FirstOrDefault(); if (p != null) p.Feed(this); }));
-            var demo = new ToolStripMenuItem("동작 바로 보기");
-            string hobbyName = pet != null ? pet.Art.Info.Hobby : "대표 동작";
-            var items = new[] { new[] { "앉아서 쉬기", "sit" }, new[] { "★ 대표 동작: " + hobbyName, "hobby" }, new[] { "잠자기", "sleep" }, new[] { "멍때리기", "daydream" }, new[] { "기지개", "stretch" },new[] { "클릭할 때 달달 떨며 우는 모습", "cry" }, new[] { "배고플 때 우는 모습", "weep" }, new[] { "폴짝 뛰기", "hop" },
-                new[] { "슬라이딩", "slide" }, new[] { "어질어질", "dizzy" }, new[] { "헬리콥터 낙하", "fall" }, new[] { "벽 타기", "wall" }, new[] { "천장 타기", "ceiling" }, new[] { "창 타기", "window" } };
-            if (pet != null && (pet.Art.Id == 0 || pet.Art.Id == 3))
-                items = items.Concat(new[] { new[] { "★ 대표 동작 두 번째: " + (pet.Art.Id == 0 ? "비눗방울 불기" : "올가미 돌리기"), "hobby2" } }).ToArray();
-            foreach (var pair in items)
-            { string key = pair[1]; demo.DropDownItems.Add(pair[0], null, delegate { Pet p = pet ?? windows.Select(a => a.Pet).FirstOrDefault(); if (p != null) p.Demonstrate(this, key); }); }
-            demo.DropDownItems.Add("몰래 하는 군무", null, delegate { DemonstrateSecretDance(pet); });
-            menu.Items.Insert(at++, demo);
-            var focus = new ToolStripMenuItem("얌전 모드 (바닥에서만)") { Checked = PlayOptions.Current.Focus };
-            focus.Click += delegate { PlayOptions.Current.Focus = !PlayOptions.Current.Focus; PlayOptions.Current.Save(); focus.Checked = PlayOptions.Current.Focus; };
-            menu.Items.Insert(at++, focus);
-            menu.Items.Insert(at++, new ToolStripSeparator());
         }
 
         private void BeginInvokeSafe(Action a)
@@ -296,36 +338,79 @@ namespace BikiniFriends
             t.Start();
         }
 
-        // ───────── 창 열기 ─────────
-        private void OpenSettings()
+        // ───────── AI 대화 ─────────
+        /// <summary>친구에게 말 걸기. pet 이 없으면(트레이 메뉴) 보이는 첫 친구와.</summary>
+        internal void StartChat(Pet pet)
         {
-            if (settingsForm != null && !settingsForm.IsDisposed) { settingsForm.Activate(); return; }
-            settingsForm = new SettingsForm(this); settingsForm.FormClosed += delegate { settingsForm = null; };
+            if (hidden) ToggleHidden();
+            Pet p = pet ?? (Chat.Pet != null ? Chat.Pet : windows.Select(w => w.Pet).FirstOrDefault(x => !x.Hidden) ?? windows.Select(w => w.Pet).FirstOrDefault());
+            if (p != null) Chat.Begin(p);
+        }
+
+        internal void StartChatFromHotkey() { StartChat(null); }
+
+        /// <summary>대화 모드 ▶ 친구 · 공감 · 설명 · 장난 · 간결 (지금 모드에 체크).</summary>
+        private ToolStripMenuItem ModeMenu()
+        {
+            var root = new ToolStripMenuItem("대화 모드  ·  " + ChatMode.Current.Name) { Enabled = ChatOptions.Current.Enabled };
+            for (int i = 0; i < ChatMode.All.Length; i++)
+            {
+                int index = i; var mode = ChatMode.All[i];
+                root.DropDownItems.Add(new ToolStripMenuItem(mode.Name + "  —  " + mode.Desc, null, delegate { SetChatMode(index); }) { Checked = index == ChatOptions.Current.Mode });
+            }
+            return root;
+        }
+
+        /// <summary>대화 모드를 바꾸고 저장한다. 말풍선으로 바뀐 걸 알려 준다(바꾼 다음 말부터 적용).</summary>
+        internal void SetChatMode(int index)
+        {
+            var o = ChatOptions.Current; o.Mode = index; o.Save(); Chat.ModeChanged();
+            Pet p = Chat.Pet ?? windows.Select(w => w.Pet).FirstOrDefault(x => !x.Hidden);
+            if (p != null) { p.Bubble = ChatMode.At(index).Name + " 모드로 얘기할게!"; p.BubbleUntil = Now + 3.5; }
+        }
+
+        private ChatDiaryForm diaryForm;
+        /// <summary>친구들이 대화 끝에 한 줄씩 적어 둔 일기장 창(하나만 연다).</summary>
+        internal void ShowDiary()
+        {
+            if (diaryForm != null && !diaryForm.IsDisposed) { diaryForm.Show(); diaryForm.Activate(); return; }
+            diaryForm = new ChatDiaryForm(TrayIconImage); diaryForm.FormClosed += delegate { diaryForm = null; }; diaryForm.Show();
+        }
+
+        // ───────── 설정창에서 쓰는 동작 ─────────
+        internal void SpawnFromUi(int character) { if (hidden) ToggleHidden(); Spawn(character); }
+        internal void RemoveByIndex(int index) { if (index >= 0 && index < windows.Count) Remove(windows[index]); }
+        internal void FeedFirst(Pet pet = null) { Pet p = pet ?? windows.Select(a => a.Pet).FirstOrDefault(); if (p != null) p.Feed(this); }
+        /// <summary>메뉴에는 "새 메모" 한 줄만 둔다(깊이를 줄이려고). 라이브러리는 메모 위젯의 ⋯ 메뉴와 Ctrl+Shift+F 로 연다.</summary>
+        private ToolStripMenuItem NewNoteItem()
+        {
+            return new ToolStripMenuItem("새 메모", null, delegate { if (Notes != null) Notes.CreateNote(); }) { ShortcutKeyDisplayString = "Ctrl+Alt+N" };
+        }
+
+        internal void ResetAllSettings()
+        {
+            PlayOptions.Current = new PlayOptions(); PlayOptions.Current.Save();
+            ChatOptions.Current = new ChatOptions(); ChatOptions.Current.Save(); Chat.ApplyOptions();
+            string roster = Settings.Roster; Settings = new Settings { Roster = roster }; Settings.Save();
+            try { StartupOption.SetEnabled(false); } catch { }
+            OnSettingsChanged(); ApplyCharacterSettings();
+        }
+
+        // ───────── 창 열기 ─────────
+        internal void OpenSettings() { OpenSettingsPage(-1); }
+        internal void OpenSettingsPage(int page)
+        {
+            if (settingsForm != null && !settingsForm.IsDisposed) { if (page >= 0) settingsForm.SelectPage(page); settingsForm.Activate(); return; }
+            settingsForm = new SettingsForm(this, page); settingsForm.FormClosed += delegate { settingsForm = null; };
             settingsForm.Show(); settingsForm.Activate();
         }
-        internal void ShowPlaySettings()
-        {
-            if (playSettingsForm != null && !playSettingsForm.IsDisposed) { playSettingsForm.Activate(); return; }
-            playSettingsForm = new PlaySettingsForm(this); playSettingsForm.FormClosed += delegate { playSettingsForm = null; }; playSettingsForm.Show();
-        }
-        internal void ShowFriendPanel()
-        {
-            if (friendPanel != null && !friendPanel.IsDisposed)
-            { if (friendPanel.WindowState == FormWindowState.Minimized) friendPanel.WindowState = FormWindowState.Normal; friendPanel.Show(); friendPanel.Activate(); return; }
-            friendPanel = new FriendPanel(this); friendPanel.FormClosed += delegate { friendPanel = null; }; friendPanel.Show();
-        }
-        internal void ShowFriendRecords()
-        {
-            if (friendRecordForm != null && !friendRecordForm.IsDisposed)
-            { if (friendRecordForm.WindowState == FormWindowState.Minimized) friendRecordForm.WindowState = FormWindowState.Normal; friendRecordForm.Show(); friendRecordForm.Activate(); return; }
-            friendRecordForm = new FriendRecordForm(this); friendRecordForm.FormClosed += delegate { friendRecordForm = null; }; friendRecordForm.Show();
-        }
+        internal void ShowPlaySettings() { OpenSettingsPage(1); }
+        internal void ShowFriendRecords() { OpenSettingsPage(3); }
+        internal void ShowFriendPanel() { OpenSettingsPage(3); }
         internal void CloseFeatureWindows()
         {
             FriendData.Current.Save();
-            if (playSettingsForm != null) playSettingsForm.Close();
-            if (friendPanel != null) friendPanel.Close();
-            if (friendRecordForm != null) friendRecordForm.Close();
+            if (diaryForm != null && !diaryForm.IsDisposed) diaryForm.Close();
             if (settingsForm != null) settingsForm.Close();
         }
 
@@ -362,7 +447,7 @@ namespace BikiniFriends
         {
             if (hidden) ToggleHidden();
             if (windows.Count == 0) Spawn();
-            foreach (var w in windows) w.Pet.Cheer(this, !string.IsNullOrEmpty(msg) ? msg : Settings.LunchMsg, 8);
+            NoticeAll(!string.IsNullOrEmpty(msg) ? msg : Settings.LunchMsg);
         }
 
         public void PreviewLeave(string msg)
@@ -385,14 +470,20 @@ namespace BikiniFriends
 
         private void CheerAll(string msg) { foreach (var w in windows) w.Pet.Cheer(this, msg, 8); }
 
+        /// <summary>점심·퇴근 같은 알림: 큰 친구로 보여 주거나(기본) 친구들의 말풍선으로 알린다.</summary>
+        private void NoticeAll(string msg)
+        {
+            if (Settings.AlertPet && !string.IsNullOrWhiteSpace(msg)) ShowAlert(msg); else CheerAll(msg);
+        }
+
         private void CheckAlarms(double now)
         {
-            if (previewLeaveAt > 0 && now >= previewLeaveAt) { previewLeaveAt = -1; CheerAll(previewLeaveMsg); }
+            if (previewLeaveAt > 0 && now >= previewLeaveAt) { previewLeaveAt = -1; NoticeAll(previewLeaveMsg); }
             DateTime dt = DateTime.Now; TimeSpan tod = dt.TimeOfDay; DateTime date = dt.Date;
             if (Settings.LunchOn && lunchDone != date)
             {
                 TimeSpan? t = Settings.ParseTime(Settings.LunchTime);
-                if (t.HasValue && tod >= t.Value && tod < t.Value + TimeSpan.FromSeconds(60)) { lunchDone = date; napping = false; CheerAll(Settings.LunchMsg); }
+                if (t.HasValue && tod >= t.Value && tod < t.Value + TimeSpan.FromSeconds(60)) { lunchDone = date; napping = false; NoticeAll(string.IsNullOrWhiteSpace(Settings.LunchMsg) ? "점심시간이야!" : Settings.LunchMsg); }
             }
             if (Settings.LeaveOn)
             {
@@ -403,7 +494,7 @@ namespace BikiniFriends
                     if (leaveGatherDone != date && tod >= gather && tod < t.Value)
                     { leaveGatherDone = date; napping = false; StartGather(now + (t.Value - tod).TotalSeconds); }
                     if (leaveDone != date && tod >= t.Value && tod < t.Value + TimeSpan.FromSeconds(60))
-                    { leaveDone = date; leaveGatherDone = date; napping = false; CheerAll(Settings.LeaveMsg); }
+                    { leaveDone = date; leaveGatherDone = date; napping = false; NoticeAll(string.IsNullOrWhiteSpace(Settings.LeaveMsg) ? "퇴근 시간이야!" : Settings.LeaveMsg); }
                 }
             }
             if (OptionsHourlyDue(dt))
@@ -445,6 +536,7 @@ namespace BikiniFriends
         internal void ShowHourWindow(string message)
         {
             ClearBubbleHourly();
+            if (Settings.AlertPet) { ShowAlert(message); return; }
             if (hourlyNotice == null || hourlyNotice.IsDisposed)
             {
                 hourlyNotice = new HourlyNotice(TrayIconImage);
@@ -458,6 +550,38 @@ namespace BikiniFriends
                 hourlyNotice.EnableEdgeGlow(Settings.EdgeGlow, Settings.EdgeGlowTheme, Settings.EdgeGlowWidth, Settings.EdgeGlowStrength);
                 hourlyNotice.Show(); hourlyNotice.BringToFront();
             }
+        }
+
+        /// <summary>
+        /// 알림(정각·점심·퇴근·메모)을 알리는 모습: 친구가 2배 크기로 화면 가운데에 나와 실루엣에 네온 빛을 두르고,
+        /// 큰 글씨 말풍선으로 내용을 말한다. 눌러서 닫을 때까지 남는다. 이미 떠 있으면 말풍선에 이어 붙인다.
+        /// </summary>
+        internal AlertPetWindow ShowAlert(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return alert;
+            bool fresh = alert == null || alert.IsDisposed;
+            if (fresh)
+            {
+                alert = new AlertPetWindow(this, windows.Count > 0 ? windows[0].Pet.Art.Id : 0);
+                alertHidden = windows.FirstOrDefault();
+                alert.FormClosed += OnAlertClosed;
+            }
+            alert.AddMessage(message);
+            if (fresh)
+            {
+                if (alertHidden != null) { alertHidden.Suppressed = true; alertHidden.Hide(); }
+                alert.Begin();
+            }
+            return alert;
+        }
+
+        private void OnAlertClosed(object sender, FormClosedEventArgs e)
+        {
+            if (ReferenceEquals(sender, alert)) alert = null;
+            PetWindow back = alertHidden; alertHidden = null;
+            if (back == null) return;
+            back.Suppressed = false;
+            if (windows.Contains(back) && !hidden && !autoHidden) { back.Show(); back.Invalidate2(); back.Present(Now); back.KeepOnTop(); }
         }
 
         internal void BeginBubbleHourly(string message)
@@ -503,6 +627,8 @@ namespace BikiniFriends
             ClearBubbleHourly();
             if (hourlyNotice != null && !hourlyNotice.IsDisposed) hourlyNotice.Close();
             hourlyNotice = null;
+            if (alert != null && !alert.IsDisposed) alert.Close();
+            alert = null;
         }
 
         // ───────── 틱 ─────────
@@ -512,6 +638,7 @@ namespace BikiniFriends
             if (dt > .1) dt = .1; if (dt < 0) dt = 0;
             if (now - lastSlow >= 1) { lastSlow = now; SlowTick(now); }
             CompanionTick(now, !paused);
+            try { Chat.Tick(now); } catch (Exception error) { FeatureLog.Write(error); }
             if (!paused) FriendData.Current.PollTimer(this);
             if (paused || hidden) return;
             CheckAlarms(now);
@@ -646,6 +773,14 @@ namespace BikiniFriends
                             else if (b.State == PetState.Drag || wallB) a.X = b.X + sign * needed;
                             else { a.X = mid + sign * needed / 2; b.X = mid - sign * needed / 2; }
                             a.ClampContact(); b.ClampContact();
+                            // 한쪽이 화면 끝에 막혀 못 밀려났으면 남은 간격을 반대쪽이 마저 물러난다(끝에 낀 채 계속 엉키는 것 방지)
+                            Pet left = sign < 0 ? a : b, right = sign < 0 ? b : a;
+                            double shortfall = needed - (right.X - left.X);
+                            if (shortfall > .5)
+                            {
+                                if (right.CanBeShoved) { right.X += shortfall; right.ClampContact(); shortfall = needed - (right.X - left.X); }
+                                if (shortfall > .5 && left.CanBeShoved) { left.X -= shortfall; left.ClampContact(); }
+                            }
                         }
                         if (pass == 0) { if (a.State != PetState.Drag) a.Bump(world, sign); if (b.State != PetState.Drag) b.Bump(world, -sign); }
                         moved = true;
@@ -656,6 +791,8 @@ namespace BikiniFriends
 
         public void Quit()
         {
+            Chat.Dispose();
+            if (Notes != null) Notes.Suspend();
             CloseFeatureWindows(); ClearHourly(); ActivityInput.Stop();
             SaveRoster();
             timer.Stop();

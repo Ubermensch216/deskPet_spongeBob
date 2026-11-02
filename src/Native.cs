@@ -210,5 +210,32 @@ namespace BikiniFriends
             }
             return bytes;
         }
+
+        /// <summary>비트맵을 레이어드 창(hwnd)의 픽셀 알파 그림으로 올리고 (x, y) 에 놓는다. 실패하면 예외.</summary>
+        internal static void Present(IntPtr hwnd, Bitmap bitmap, int x, int y, byte alpha)
+        {
+            IntPtr screen = Native.GetDC(IntPtr.Zero);
+            if (screen == IntPtr.Zero) return;
+            IntPtr dc = IntPtr.Zero, image = IntPtr.Zero, previous = IntPtr.Zero;
+            try
+            {
+                dc = Native.CreateCompatibleDC(screen);
+                byte[] bytes = Premultiplied(bitmap);
+                var info = new Native.BitmapInfo { Size = 40, Width = bitmap.Width, Height = -bitmap.Height, Planes = 1, Bits = 32, ImageSize = (uint)bytes.Length };
+                IntPtr bits; image = Native.CreateDIBSection(screen, ref info, 0, out bits, IntPtr.Zero, 0);
+                if (image == IntPtr.Zero || bits == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                Marshal.Copy(bytes, 0, bits, bytes.Length); previous = Native.SelectObject(dc, image);
+                var size = new Native.SIZE(bitmap.Width, bitmap.Height); var src = new Native.POINT(0, 0); var dst = new Native.POINT(x, y);
+                var blend = new Native.BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = alpha, AlphaFormat = 1 };
+                if (!Native.UpdateLayeredWindow(hwnd, screen, ref dst, ref size, dc, ref src, 0, ref blend, Native.ULW_ALPHA)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally
+            {
+                if (previous != IntPtr.Zero && dc != IntPtr.Zero) Native.SelectObject(dc, previous);
+                if (image != IntPtr.Zero) Native.DeleteObject(image);
+                if (dc != IntPtr.Zero) Native.DeleteDC(dc);
+                Native.ReleaseDC(IntPtr.Zero, screen);
+            }
+        }
     }
 }
