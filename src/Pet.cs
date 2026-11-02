@@ -208,7 +208,7 @@ namespace BikiniFriends
                     SnapToFloor(w);
                     if (StateT > stateDur)
                     {
-                        if (w.Rng.NextDouble() < .35) Dir = -Dir;
+                        if (w.Rng.NextDouble() < .35 && !(AvoidingPartner(w) && -Dir != avoidDir)) Dir = -Dir;
                         SetState(PetState.Walk, w);
                     }
                     break;
@@ -272,6 +272,13 @@ namespace BikiniFriends
             Rectangle? other = AreaAtX(w, probe, Y);
             if (!other.HasValue || other.Value == Area)
             {
+                if (AvoidingPartner(w) && Dir == avoidDir)
+                {
+                    // 상대를 피해 끝까지 왔다: 돌아서면 다시 부딪히니 그 자리에서 쉰다
+                    X = Dir <= 0 ? Area.Left + half : Area.Right - half;
+                    if (State == PetState.Walk) SetState(PetState.Pause, w);
+                    return;
+                }
                 Dir = -Dir;
                 X = Dir <= 0 ? Area.Right - half : Area.Left + half;
                 if (State == PetState.Walk && w.Rng.NextDouble() < .4) SetState(PetState.Pause, w);
