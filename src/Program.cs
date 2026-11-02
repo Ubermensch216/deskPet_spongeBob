@@ -378,6 +378,15 @@ namespace BikiniFriends
                 App.ResolveCompanionContacts(w4, new List<Pet> { a1, a2 }, null);
                 check(a2.ContactBody(0).Left - a1.ContactBody(0).Right > -1 || Math.Abs(a1.X - a2.X) > a1.Art.W * .6, "겹친 친구는 서로 떨어짐");
 
+                // 화면 끝에서 겹친 친구들 엉킴 풀림 (한쪽이 막히면 반대쪽이 남은 간격만큼 물러남)
+                var wEdge = new FakeWorld();
+                double edgeRight = wEdge.Areas[0].Right;
+                var e1 = new Pet(wEdge, 0, edgeRight - 10, 720) { Area = wEdge.Areas[0] };
+                var e2 = new Pet(wEdge, 1, edgeRight - 15, 720) { Area = wEdge.Areas[0] };
+                e1.SetState(PetState.Pause, wEdge); e2.SetState(PetState.Pause, wEdge);
+                App.ResolveCompanionContacts(wEdge, new List<Pet> { e1, e2 }, null);
+                check(Math.Abs(e1.X - e2.X) >= (e1.Art.W + e2.Art.W) * .35 && (e1.X <= edgeRight && e2.X <= edgeRight), "화면 끝에서도 남은 간격만큼 반대쪽이 밀려나 엉키지 않음");
+
                 // 메모·알림펫 자체 점검
                 NoteSelfTests(check, dir);
             }
